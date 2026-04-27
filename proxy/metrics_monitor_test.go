@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coocood/freecache"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/mostlygeek/llama-swap/event"
@@ -1031,33 +1032,9 @@ func TestMetricsMonitor_AddCapture(t *testing.T) {
 		assert.Equal(t, []byte("test response"), captured.RespBody)
 	})
 
-	t.Run("evicts oldest when exceeding max size", func(t *testing.T) {
-		mm := newMetricsMonitor(testLogger, 10, 5)
-		// Each full ReqRespCapture with 80 bytes random data compresses to ~185 bytes.
-		// 2 captures = ~370 bytes, 3 captures = ~555 bytes. Set limit so only 2 fit.
-		mm.maxCaptureSize = 450
-
-		// Use random-looking data that doesn't compress well with zstd
-		rng := rand.New(rand.NewSource(42))
-		capture1 := ReqRespCapture{ID: 0, ReqBody: make([]byte, 80)}
-		rng.Read(capture1.ReqBody)
-		capture2 := ReqRespCapture{ID: 1, ReqBody: make([]byte, 80)}
-		rng.Read(capture2.ReqBody)
-		capture3 := ReqRespCapture{ID: 2, ReqBody: make([]byte, 80)}
-		rng.Read(capture3.ReqBody)
-
-		mm.addCapture(capture1)
-		mm.addCapture(capture2)
-		// Adding capture3 should evict capture1
-		mm.addCapture(capture3)
-
-		assert.Nil(t, mm.getCaptureByID(0), "capture 0 should be evicted")
-		assert.NotNil(t, mm.getCaptureByID(1), "capture 1 should exist")
-		assert.NotNil(t, mm.getCaptureByID(2), "capture 2 should exist")
-	})
-
 	t.Run("skips capture larger than max size", func(t *testing.T) {
-		mm := newMetricsMonitor(testLogger, 10, 5)
+		mm := newMetricsMonitor(testLogger, 10, 0)
+		mm.captures = freecache.NewCache(100)
 		mm.maxCaptureSize = 100
 
 		// Use random data that doesn't compress well to create an oversized capture

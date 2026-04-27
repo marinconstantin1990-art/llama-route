@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coocood/freecache"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
@@ -120,24 +121,23 @@ type metricsMonitor struct {
 
 	// capture fields
 	enableCaptures bool
-	captures       map[int][]byte // zstd-compressed CBOR of ReqRespCapture
-	captureOrder   []int          // track insertion order for FIFO eviction
-	captureSize    int            // current total compressed size in bytes
-	maxCaptureSize int            // max bytes for captures (uncompressed)
+	captures       *freecache.Cache // LRU cache for zstd-compressed CBOR of ReqRespCapture
+	maxCaptureSize int              // max bytes for captures
 }
 
 // newMetricsMonitor creates a new metricsMonitor. captureBufferMB is the
 // capture buffer size in megabytes; 0 disables captures.
 func newMetricsMonitor(logger *LogMonitor, maxMetrics int, captureBufferMB int) *metricsMonitor {
-	return &metricsMonitor{
+	mm := &metricsMonitor{
 		logger:         logger,
 		maxMetrics:     maxMetrics,
 		enableCaptures: captureBufferMB > 0,
-		captures:       make(map[int][]byte),
-		captureOrder:   make([]int, 0),
-		captureSize:    0,
 		maxCaptureSize: captureBufferMB * 1024 * 1024,
 	}
+	if captureBufferMB > 0 {
+		mm.captures = freecache.NewCache(mm.maxCaptureSize)
+	}
+	return mm
 }
 
 // addMetrics adds a new metric to the collection and publishes an event.
@@ -156,7 +156,12 @@ func (mp *metricsMonitor) addMetrics(metric ActivityLogEntry) int {
 	return metric.ID
 }
 
-// addCapture adds a new capture to the buffer with size-based eviction.
+// captureKey converts an int ID to a 4-byte key for freecache.
+func captureKey(id int) []byte {
+	return []byte{byte(id), byte(id >> 8), byte(id >> 16), byte(id >> 24)}
+}
+
+// addCapture adds a new capture to the buffer.
 // Captures are skipped if enableCaptures is false or if compressed data exceeds maxCaptureSize.
 func (mp *metricsMonitor) addCapture(capture ReqRespCapture) {
 	if !mp.enableCaptures {
@@ -177,44 +182,36 @@ func (mp *metricsMonitor) addCapture(capture ReqRespCapture) {
 
 	compressionRatio := (1 - float64(captureSize)/float64(uncompressedBytes)) * 100
 
-	mp.mu.Lock()
-	defer mp.mu.Unlock()
-
-	// Evict oldest (FIFO) until room available for the compressed data
-	for mp.captureSize+captureSize > mp.maxCaptureSize && len(mp.captureOrder) > 0 {
-		oldestID := mp.captureOrder[0]
-		mp.captureOrder = mp.captureOrder[1:]
-		if evicted, exists := mp.captures[oldestID]; exists {
-			l := len(evicted)
-			mp.captureSize -= l
-			delete(mp.captures, oldestID)
-			mp.logger.Debugf("Capture %d evicted to make space: %d bytes", oldestID, l)
+	key := captureKey(capture.ID)
+	for i := 0; i < 10; i++ {
+		if err := mp.captures.Set(key, compressed, 0); err == nil {
+			break
+		}
+		if i == 9 {
+			mp.logger.Warnf("failed to store capture %d after retries: %v", capture.ID, err)
+			return
 		}
 	}
-
-	mp.captures[capture.ID] = compressed
-	mp.captureOrder = append(mp.captureOrder, capture.ID)
-	mp.captureSize += captureSize
 
 	mp.logger.Debugf("Capture %d compressed and saved: %d bytes -> %d bytes (%.1f%% compression)", capture.ID, uncompressedBytes, len(compressed), compressionRatio)
 }
 
 // getCompressedBytes returns the raw compressed bytes for a capture by ID.
 func (mp *metricsMonitor) getCompressedBytes(id int) ([]byte, bool) {
-	mp.mu.RLock()
-	defer mp.mu.RUnlock()
-
-	data, exists := mp.captures[id]
-	return data, exists
+	if mp.captures == nil {
+		return nil, false
+	}
+	data, err := mp.captures.Get(captureKey(id))
+	if err != nil {
+		return nil, false
+	}
+	return data, true
 }
 
 // getCaptureByID decompresses and unmarshals a capture by ID.
 // Returns nil if the capture is not found or decompression fails.
 func (mp *metricsMonitor) getCaptureByID(id int) *ReqRespCapture {
-	mp.mu.RLock()
-	defer mp.mu.RUnlock()
-
-	data, exists := mp.captures[id]
+	data, exists := mp.getCompressedBytes(id)
 	if !exists {
 		return nil
 	}

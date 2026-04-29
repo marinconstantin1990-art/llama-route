@@ -158,6 +158,16 @@ type Config struct {
 
 	// support remote peers, see issue #433, #296
 	Peers PeerDictionaryConfig `yaml:"peers"`
+
+	// User-managed GPU enable/disable overlay. Keys are GPU IDs from the
+	// gpu package ("nvidia:0", "amd:1", ...). Detected GPUs not present in
+	// this map default to enabled.
+	GPUs map[string]GPUConfig `yaml:"gpus"`
+}
+
+// GPUConfig is the per-GPU overlay stored in config.yaml.
+type GPUConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 func (c *Config) RealModelName(search string) (string, bool) {

@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/mostlygeek/llama-swap/event"
 	"github.com/mostlygeek/llama-swap/proxy/config"
+	"github.com/mostlygeek/llama-swap/proxy/gpu"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -93,6 +94,22 @@ type ProxyManager struct {
 
 	// peer proxy see: #296, #433
 	peerProxy *PeerProxy
+
+	// configPath is the on-disk path to the YAML config, used by settings
+	// endpoints to persist UI-driven changes. Empty disables those endpoints.
+	configPath string
+
+	// detectedGPUs is the cached result of the most recent GPU detection.
+	// Settings endpoints overlay the user's enable/disable preferences from
+	// pm.config.GPUs on top of this list.
+	detectedGPUs []gpu.GPU
+}
+
+// SetConfigPath records the path to the loaded YAML config so that settings
+// endpoints can persist UI-driven changes back to the file. Without this set,
+// those endpoints return 503.
+func (pm *ProxyManager) SetConfigPath(path string) {
+	pm.configPath = path
 }
 
 func New(proxyConfig config.Config) *ProxyManager {
@@ -215,6 +232,11 @@ func New(proxyConfig config.Config) *ProxyManager {
 			pm.processGroups[groupID] = processGroup
 		}
 	}
+
+	// Detect available GPUs once at startup; the Settings UI can refresh on
+	// demand via POST /api/gpus/rescan. Detection has its own internal
+	// timeout, so this is safe to run synchronously.
+	pm.detectedGPUs = gpu.Detect(context.Background())
 
 	pm.setupGinEngine()
 
@@ -445,6 +467,7 @@ func (pm *ProxyManager) setupGinEngine() {
 	// see: proxymanager_api.go
 	// add API handler functions
 	addApiHandlers(pm)
+	addSettingsApiHandlers(pm)
 
 	// Disable console color for testing
 	gin.DisableConsoleColor()

@@ -54,6 +54,19 @@ type ModelConfig struct {
 
 	// Timeout settings for proxy connections
 	Timeouts TimeoutsConfig `yaml:"timeouts"`
+
+	// AutoScale lets the proxy spawn additional llama-server instances of this
+	// model when all slots of running instances are busy and a free GPU is
+	// available. Default zero-value (Enabled=false) preserves the legacy
+	// single-instance behavior where overflow returns HTTP 429.
+	AutoScale AutoScaleConfig `yaml:"autoScale"`
+}
+
+// AutoScaleConfig controls per-model multi-instance scaling.
+type AutoScaleConfig struct {
+	Enabled      bool     `yaml:"enabled"`
+	MaxInstances int      `yaml:"maxInstances"`
+	AllowedGPUs  []string `yaml:"allowedGPUs"`
 }
 
 func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {

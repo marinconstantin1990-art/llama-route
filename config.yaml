@@ -1,0 +1,30 @@
+# llama-route minimal config
+# Add models here, or use the Settings page in the UI to add them — saves are
+# written back to this file and picked up automatically when the proxy is
+# launched with --watch-config.
+
+healthCheckTimeout: 120
+logLevel: info
+startPort: 9000
+
+# Per-GPU enable/disable overlay. The Settings UI manages this list; you can
+# also edit it by hand. Omitted GPUs default to enabled.
+gpus:
+  "nvidia:0": {enabled: true}
+
+models:
+  Qwopus3.5-9B-v3-GGUF-Q8_0:
+    cmd: |
+      llama-server --port ${PORT}
+        --ctx-size 65536 -fa on -b 2048 -ub 2048 -ngl -1
+        --image-min-tokens 560 --image-max-tokens 1580
+        --temperature 0
+        --reasoning-format deepseek
+        --reasoning-budget 2000
+        --reasoning-budget-message "Espera, le estoy dando demasiadas vueltas. Respondamos ahora."
+        -hf Jackrong/Qwopus3.5-9B-v3-GGUF:Q8_0
+    concurrencyLimit: 4
+    autoScale:
+      enabled: true
+      maxInstances: 2
+      allowedGPUs: ["nvidia:0"]

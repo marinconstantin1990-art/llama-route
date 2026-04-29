@@ -124,8 +124,42 @@ func deleteKey(mapping *yaml.Node, key string) bool {
 	return false
 }
 
-// SetModel adds or replaces a model entry in config.yaml. The model is
-// marshaled from the supplied ModelConfig so all yaml-tagged fields round-trip.
+// modelWriteShape is the on-disk representation used when persisting a model
+// from the API. It deliberately uses omitempty everywhere so we never write
+// zero-value fields that would (a) override sensible defaults applied during
+// load or (b) trip up custom UnmarshalYAML logic — e.g. MacroList rejects an
+// empty list because it expects a mapping.
+type modelWriteShape struct {
+	Cmd              string           `yaml:"cmd"`
+	Name             string           `yaml:"name,omitempty"`
+	Description      string           `yaml:"description,omitempty"`
+	Aliases          []string         `yaml:"aliases,omitempty"`
+	ConcurrencyLimit int              `yaml:"concurrencyLimit,omitempty"`
+	UnloadAfter      int              `yaml:"ttl,omitempty"`
+	AutoScale        *AutoScaleConfig `yaml:"autoScale,omitempty"`
+}
+
+func toModelWriteShape(m ModelConfig) modelWriteShape {
+	w := modelWriteShape{
+		Cmd:              m.Cmd,
+		Name:             m.Name,
+		Description:      m.Description,
+		Aliases:          m.Aliases,
+		ConcurrencyLimit: m.ConcurrencyLimit,
+		UnloadAfter:      m.UnloadAfter,
+	}
+	// Only emit autoScale when the user actually enabled it or set non-default
+	// fields, so the file stays clean for legacy single-instance models.
+	if m.AutoScale.Enabled || m.AutoScale.MaxInstances != 0 || len(m.AutoScale.AllowedGPUs) > 0 {
+		as := m.AutoScale
+		w.AutoScale = &as
+	}
+	return w
+}
+
+// SetModel adds or replaces a model entry in config.yaml. Only fields the
+// caller actually populated are written — zero-value fields fall back to the
+// defaults applied during config load.
 func SetModel(path, id string, m ModelConfig) error {
 	return EditFile(path, func(root *yaml.Node) error {
 		top, err := rootMap(root)
@@ -138,7 +172,7 @@ func SetModel(path, id string, m ModelConfig) error {
 		}
 
 		var modelNode yaml.Node
-		if err := modelNode.Encode(m); err != nil {
+		if err := modelNode.Encode(toModelWriteShape(m)); err != nil {
 			return fmt.Errorf("encode model: %w", err)
 		}
 

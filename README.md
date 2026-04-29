@@ -44,6 +44,26 @@ Built in Go for performance and simplicity, llama-swap has zero dependencies and
   - Automatic unloading of models after timeout by setting a `ttl`
   - Reliable Docker and Podman support using `cmd` and `cmdStop` together
   - Preload models on startup with `hooks` ([#235](https://github.com/mostlygeek/llama-swap/pull/235))
+- ✅ GPU-aware scheduling (llama-route additions)
+  - Auto-detects NVIDIA, AMD, Apple Metal, and Intel GPUs at startup
+  - Per-GPU enable/disable from the UI; persisted to `config.yaml`
+  - Per-model auto-scaling configuration (`autoScale.enabled`, `maxInstances`, `allowedGPUs`) — schema and UI ready; multi-instance routing lands in a follow-up
+- ✅ UI Settings page
+  - Add / edit / delete models from the browser (free-form command — works with llama-server, vLLM, tabbyAPI, sd-server, docker run, anything that listens on `${PORT}`)
+  - Saves are written back to `config.yaml` and picked up by `--watch-config`
+
+### GPU detection requirements
+
+llama-route shells out to vendor-specific CLIs to enumerate GPUs at startup. Install whichever apply to your hardware — missing tools are skipped silently, they don't break startup.
+
+| Vendor | Required CLI | Install (Ubuntu/Debian) | Notes |
+|---|---|---|---|
+| NVIDIA | `nvidia-smi` | comes with the proprietary driver | usually already on PATH if CUDA works |
+| AMD (ROCm) | `rocm-smi` | `sudo apt install rocm-smi` (or full ROCm SDK) | RX 6600 / gfx1032 needs `HSA_OVERRIDE_GFX_VERSION=10.3.0` to appear |
+| Apple Silicon | `system_profiler` | preinstalled on macOS | unified memory; "free VRAM" is reported as 0 |
+| Intel Arc / iGPU | `xpu-smi` | from Intel oneAPI / Level Zero packages | optional |
+
+The proxy still works without any of these — you simply lose the GPU list in the Settings UI and the auto-scale GPU picker. You can still pin a model to a specific device manually via `env: ["CUDA_VISIBLE_DEVICES=0"]` (or `HIP_VISIBLE_DEVICES`, etc.) in its config.
 
 ### Web UI
 
@@ -66,6 +86,11 @@ Manually load and unload models:
 Real time log streaming:
 
 <img width="1107" height="559" alt="image" src="https://github.com/user-attachments/assets/39669a10-cff2-409e-836a-5bad8bd0140c" />
+
+Settings page (llama-route): manage GPUs and add/edit models without touching `config.yaml` by hand:
+
+- **GPUs** — table of detected devices (NVIDIA / AMD / Apple Metal / Intel) with VRAM totals and an Enabled toggle per row. Click **Rescan** to re-probe.
+- **Models** — add new models pointing at a local GGUF or a HuggingFace repo (`-hf` flag). Free-form parameter textarea accepts the full llama-server flag set.
 
 ## Installation
 
@@ -188,6 +213,32 @@ Almost all configuration settings are optional and can be added one step at a ti
   - `filters` rewrite parts of requests before sending to the upstream server
 
 See the [configuration documentation](docs/configuration.md) for all options.
+
+### GPU and auto-scale settings
+
+llama-route extends the config with optional GPU and auto-scale sections:
+
+```yaml
+# top-level: per-GPU enable/disable overlay (managed by the Settings UI)
+gpus:
+  "nvidia:0": { enabled: true }
+  "nvidia:1": { enabled: false }
+
+models:
+  qwen-coder:
+    cmd: |
+      llama-server --ctx-size 65536 -fa on -b 2048 -ub 2048 -ngl -1
+        --reasoning-format deepseek --reasoning-budget 2000
+        -hf Jackrong/Qwopus3.5-9B-v3-GGUF:Q8_0
+        --port ${PORT}
+    concurrencyLimit: 8        # slots per running instance
+    autoScale:
+      enabled: true            # spawn extra instances on free GPUs (follow-up)
+      maxInstances: 4
+      allowedGPUs: ["nvidia:0", "nvidia:1"]
+```
+
+GPU IDs are stable (`<vendor>:<index>`) and come from the detector — you can also see them under **Settings → GPUs** in the UI.
 
 ## How does llama-swap work?
 

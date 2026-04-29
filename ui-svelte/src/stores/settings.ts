@@ -76,24 +76,15 @@ export async function deleteModel(id: string): Promise<void> {
   await jsonOrThrow<unknown>(res);
 }
 
-// composeCmd builds a llama-server command line from the form fields. The
-// resulting string is what gets stored under models.<id>.cmd in config.yaml.
-export function composeCmd(opts: {
-  source: "local" | "hf";
-  modelPath: string;
-  hfRepo: string;
-  extraParams: string;
-  port?: string; // defaults to ${PORT} for the proxy auto-port allocator
-}): string {
-  const port = opts.port ?? "${PORT}";
-  const parts: string[] = ["llama-server"];
-  const extra = opts.extraParams.trim();
-  if (extra) parts.push(extra);
-  if (opts.source === "hf" && opts.hfRepo.trim()) {
-    parts.push(`-hf ${opts.hfRepo.trim()}`);
-  } else if (opts.source === "local" && opts.modelPath.trim()) {
-    parts.push(`-m ${opts.modelPath.trim()}`);
-  }
-  parts.push(`--port ${port}`);
-  return parts.join(" ");
-}
+// CMD_PLACEHOLDER is the example shown in the Settings form. It demonstrates
+// the only contract the proxy enforces: somewhere in the command, use
+// ${PORT} so the auto-port allocator can substitute a free port at launch.
+export const CMD_PLACEHOLDER = `llama-server --port \${PORT} \\
+  --ctx-size 65536 -fa on -b 2048 -ub 2048 -ngl -1 \\
+  --temperature 0 \\
+  -hf Jackrong/Qwopus3.5-9B-v3-GGUF:Q8_0
+
+# Other backends work too — the proxy just runs whatever you put here:
+#   python -m vllm.entrypoints.openai.api_server --port \${PORT} --model Qwen/Qwen2.5-Coder-7B-Instruct
+#   sd-server --port \${PORT} --model /models/sdxl.gguf
+#   docker run --rm -p \${PORT}:8000 ghcr.io/your/server:tag`;

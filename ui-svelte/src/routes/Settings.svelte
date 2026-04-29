@@ -7,7 +7,7 @@
     fetchModels,
     saveModel,
     deleteModel,
-    composeCmd,
+    CMD_PLACEHOLDER,
     type GPU,
     type ModelSettings,
   } from "../stores/settings";
@@ -22,17 +22,11 @@
   let editorIsUpdate = $state(false);
   let formId = $state("");
   let formName = $state("");
-  let formSource: "local" | "hf" = $state("hf");
-  let formModelPath = $state("");
-  let formHfRepo = $state("");
-  let formExtra = $state("");
+  let formCmd = $state("");
   let formConcurrency = $state(8);
   let formAutoScale = $state(false);
   let formMaxInstances = $state(2);
   let formAllowedGPUs: string[] = $state([]);
-
-  const examplePlaceholder =
-    "--ctx-size 65536 -fa on -b 2048 -ub 2048 -ngl -1 --temperature 0";
 
   async function refresh() {
     loading = true;
@@ -67,10 +61,7 @@
     editorIsUpdate = false;
     formId = "";
     formName = "";
-    formSource = "hf";
-    formModelPath = "";
-    formHfRepo = "";
-    formExtra = "";
+    formCmd = "";
     formConcurrency = 8;
     formAutoScale = false;
     formMaxInstances = 2;
@@ -82,30 +73,7 @@
     editorIsUpdate = true;
     formId = m.id;
     formName = m.name ?? "";
-    // Best-effort parse of cmd back into source + extra; users always retain
-    // the freedom to edit the raw cmd field directly via config.yaml.
-    const cmd = m.cmd;
-    const hfMatch = cmd.match(/-hf\s+(\S+)/);
-    const mMatch = cmd.match(/(?:^|\s)-m\s+(\S+)/);
-    if (hfMatch) {
-      formSource = "hf";
-      formHfRepo = hfMatch[1];
-      formModelPath = "";
-    } else if (mMatch) {
-      formSource = "local";
-      formModelPath = mMatch[1];
-      formHfRepo = "";
-    } else {
-      formSource = "hf";
-      formHfRepo = "";
-      formModelPath = "";
-    }
-    formExtra = cmd
-      .replace(/^llama-server\s*/, "")
-      .replace(/-hf\s+\S+/, "")
-      .replace(/(^|\s)-m\s+\S+/, "")
-      .replace(/--port\s+\S+/, "")
-      .trim();
+    formCmd = m.cmd ?? "";
     formConcurrency = m.concurrencyLimit || 8;
     formAutoScale = m.autoScale?.enabled ?? false;
     formMaxInstances = m.autoScale?.maxInstances || 2;
@@ -119,12 +87,15 @@
       error = "Model id is required";
       return;
     }
-    const cmd = composeCmd({
-      source: formSource,
-      modelPath: formModelPath,
-      hfRepo: formHfRepo,
-      extraParams: formExtra,
-    });
+    const cmd = formCmd.trim();
+    if (!cmd) {
+      error = "Command is required";
+      return;
+    }
+    if (!cmd.includes("${PORT}")) {
+      error = "Command must reference \${PORT} so the proxy can assign a port";
+      return;
+    }
     const payload: ModelSettings = {
       id: formId.trim(),
       name: formName,
@@ -265,29 +236,18 @@
           <input class="w-full border border-border rounded px-2 py-1 bg-transparent" bind:value={formName} />
         </label>
 
-        <div class="mb-2">
-          <span class="text-sm">Source</span>
-          <div class="flex gap-3 text-sm">
-            <label><input type="radio" bind:group={formSource} value="hf" /> HuggingFace</label>
-            <label><input type="radio" bind:group={formSource} value="local" /> Local file</label>
-          </div>
-        </div>
-
-        {#if formSource === "hf"}
-          <label class="block mb-2">
-            <span class="text-sm">HF repo:quant</span>
-            <input class="w-full border border-border rounded px-2 py-1 bg-transparent font-mono text-xs" bind:value={formHfRepo} placeholder="Jackrong/Qwopus3.5-9B-v3-GGUF:Q8_0" />
-          </label>
-        {:else}
-          <label class="block mb-2">
-            <span class="text-sm">Model file path</span>
-            <input class="w-full border border-border rounded px-2 py-1 bg-transparent font-mono text-xs" bind:value={formModelPath} placeholder="/models/qwen.gguf" />
-          </label>
-        {/if}
-
         <label class="block mb-2">
-          <span class="text-sm">Extra parameters</span>
-          <textarea class="w-full border border-border rounded px-2 py-1 bg-transparent font-mono text-xs" rows="3" bind:value={formExtra} placeholder={examplePlaceholder}></textarea>
+          <span class="text-sm">Command</span>
+          <textarea
+            class="w-full border border-border rounded px-2 py-1 bg-transparent font-mono text-xs"
+            rows="8"
+            bind:value={formCmd}
+            placeholder={CMD_PLACEHOLDER}
+          ></textarea>
+          <span class="text-xs text-gray-500">
+            Free-form. Anything that listens on the substituted <code>${"${PORT}"}</code> works —
+            llama-server, vLLM, tabbyAPI, sd-server, a docker run, etc.
+          </span>
         </label>
 
         <label class="block mb-2">
